@@ -10,7 +10,12 @@ import org.apache.spark.storage.StorageLevel
 import scala.collection.JavaConversions._
 import scala.collection.mutable.ListBuffer
 
-class ReadFastqFiles(r1: File, r2: Option[File], numberChunks: Int = 10, minSize: Int = 50000, groupSize: Int = 50, tempDir: Option[File] = None)(implicit sc: SparkContext) extends Iterator[RDD[String]] {
+class ReadFastqFiles(r1: File,
+                     r2: Option[File],
+                     numberChunks: Int = 10,
+                     minSize: Int = 50000,
+                     groupSize: Int = 50,
+                     tempDir: Option[File] = None)(implicit sc: SparkContext) extends Iterator[RDD[String]] with AutoCloseable {
   private val readerR1 = new FastqReader(r1)
   private val readerR2 = r2.map(new FastqReader(_))
   private val it = readerR2.map(itR2 => readerR1.iterator().zip(itR2.iterator().map(Option(_))))
@@ -67,5 +72,14 @@ class ReadFastqFiles(r1: File, r2: Option[File], numberChunks: Int = 10, minSize
     outputChunkId += 1
 
     sc.textFile(tempFile.getAbsolutePath, 1).setName("Read fastq file").persist(StorageLevel.MEMORY_ONLY_SER)
+  }
+
+  def close(): Unit = {
+    readerR1.close()
+    readerR2.foreach(_.close())
+    for (i <- 0 until numberChunks) {
+      workingChunks(i) = Seq()
+      completedChunks(i) = Seq()
+    }
   }
 }

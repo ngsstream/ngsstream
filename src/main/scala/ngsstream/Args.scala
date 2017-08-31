@@ -10,7 +10,9 @@ case class Args(r1: File = null,
                 sparkMaster: Option[String] = None,
                 sparkConfigValues: Map[String, String] = Map(
                   "spark.memory.fraction" -> "0.1",
-                  "spark.memory.storageFraction" -> "0.2"
+                  "spark.memory.storageFraction" -> "0.2",
+                  "spark.driver.maxResultSize" -> "2G",
+                  "spark.driver.memory" -> "2G"
                 )
                )
 

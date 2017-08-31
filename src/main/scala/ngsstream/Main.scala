@@ -31,7 +31,8 @@ object Main {
         .setJars(jars))((a, b) => a.set(b._1, b._2))
 
     implicit val sc: SparkContext = new SparkContext(conf)
-    val rdds = new ReadFastqFiles(cmdArgs.r1, cmdArgs.r2, tempDir = cmdArgs.tempDir).map(ori => ori -> {
+    val reader = new ReadFastqFiles(cmdArgs.r1, cmdArgs.r2, tempDir = cmdArgs.tempDir)
+    val rdds = reader.map(ori => ori -> {
       val rdd = ori
         //.pipe(s"cutadapt ${if (paired) "--interleaved" else ""} -").setName("cutadapt")
         .pipe(s"bwa mem ${if (paired) "-p" else ""} ${cmdArgs.reference} -").setName("bwa mem")
@@ -48,15 +49,16 @@ object Main {
         }.setName("convert to sam records")//.cache()
       rdd -> rdd.countAsync()
     }
-    )
+    ).toList
+    reader.close()
 
-    val total = sc.union(rdds.map(_._2._1).toList)
+    val total = sc.union(rdds.map(_._2._1))
 //    val sorted = total
 //      .sortBy(r => (Option(r.r1.getContig), Option(r.r1.getAlignmentStart))).persist(StorageLevel.MEMORY_AND_DISK_SER_2)
 //    println(s"${total.count()} fragments found")
 
-    rdds.foreach(_._1.unpersist(false))
-    rdds.foreach(_._2._1.unpersist(false))
+//    rdds.foreach(_._1.unpersist(false))
+//    rdds.foreach(_._2._1.unpersist(false))
 
     //total.foreach(r => println(r.r1.getContig + "\t" + r.r1.getAlignmentStart))
     //println("contigs: " + total.keys.collect().mkString(", "))
@@ -77,7 +79,7 @@ object Main {
 
   def writeToBam(records: RDD[SamRecordPair], outputFile: File, dict: SAMSequenceDictionary): Unit = {
     val sorted = records.flatMap(r => r.r1 :: r.r2.toList ::: r.secondary)
-      .sortBy(r => (Option(r.getContig), Option(r.getAlignmentStart)))
+      .sortBy(r => (Option(r.getContig), Option(r.getAlignmentStart))).persist(StorageLevel.MEMORY_ONLY_SER)
     val header = new SAMFileHeader
     header.setSequenceDictionary(dict)
     header.setSortOrder(SAMFileHeader.SortOrder.coordinate)
@@ -86,8 +88,18 @@ object Main {
     val writer = new SAMFileWriterFactory()
       .setUseAsyncIo(true)
       .setCreateIndex(true)
+      .setCreateMd5File(true)
       .makeBAMWriter(header, true, outputFile)
-    sorted.toLocalIterator.foreach(r => writer.addAlignment(r))
+//    val parts = for (p <- sorted.partitions) yield {
+//      val partRdd = sorted.mapPartitionsWithIndex({ case (i, it) => if (p.index == i) it else Iterator() }).repartition(1).persist()
+//      (partRdd, partRdd.countAsync())
+//    }
+//    parts.foreach { x =>
+//      x._1.toLocalIterator.foreach(writer.addAlignment)
+//      x._1.unpersist()
+//    }
+    sorted.toLocalIterator.foreach(writer.addAlignment)
+    sorted.unpersist()
     writer.close()
   }
 }
