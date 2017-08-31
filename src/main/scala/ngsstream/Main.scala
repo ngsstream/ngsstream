@@ -23,14 +23,15 @@ object Main {
       .asInstanceOf[URLClassLoader]
       .getURLs
       .map(_.getFile)
-    val conf = new SparkConf()
-      .setExecutorEnv(sys.env.toArray)
-      .setAppName("ngsstream")
-      .setMaster(cmdArgs.sparkMaster.getOrElse("local[2]"))
-      .setJars(jars)
+    val conf = cmdArgs.sparkConfigValues.foldLeft(
+      new SparkConf()
+        .setExecutorEnv(sys.env.toArray)
+        .setAppName("ngsstream")
+        .setMaster(cmdArgs.sparkMaster.getOrElse("local[2]"))
+        .setJars(jars))((a, b) => a.set(b._1, b._2))
+
     implicit val sc: SparkContext = new SparkContext(conf)
-sc.binaryFiles()
-    val rdds = new ReadFastqFiles(cmdArgs.r1, cmdArgs.r2).map(ori => ori -> {
+    val rdds = new ReadFastqFiles(cmdArgs.r1, cmdArgs.r2, tempDir = cmdArgs.tempDir).map(ori => ori -> {
       val rdd = ori
         //.pipe(s"cutadapt ${if (paired) "--interleaved" else ""} -").setName("cutadapt")
         .pipe(s"bwa mem ${if (paired) "-p" else ""} ${cmdArgs.reference} -").setName("bwa mem")
@@ -50,8 +51,10 @@ sc.binaryFiles()
     )
 
     val total = sc.union(rdds.map(_._2._1).toList)
-      .sortBy(r => (r.r1.getContig, r.r1.getAlignmentStart)).persist(StorageLevel.MEMORY_AND_DISK_SER_2)
+//    val sorted = total
+//      .sortBy(r => (Option(r.r1.getContig), Option(r.r1.getAlignmentStart))).persist(StorageLevel.MEMORY_AND_DISK_SER_2)
 //    println(s"${total.count()} fragments found")
+
     rdds.foreach(_._1.unpersist(false))
     rdds.foreach(_._2._1.unpersist(false))
 
@@ -73,7 +76,8 @@ sc.binaryFiles()
   }
 
   def writeToBam(records: RDD[SamRecordPair], outputFile: File, dict: SAMSequenceDictionary): Unit = {
-    val sorted = records.flatMap(r => r.r1 :: r.r2.toList ::: r.secondary).sortBy(r => (r.getContig, r.getAlignmentStart))
+    val sorted = records.flatMap(r => r.r1 :: r.r2.toList ::: r.secondary)
+      .sortBy(r => (Option(r.getContig), Option(r.getAlignmentStart)))
     val header = new SAMFileHeader
     header.setSequenceDictionary(dict)
     header.setSortOrder(SAMFileHeader.SortOrder.coordinate)
