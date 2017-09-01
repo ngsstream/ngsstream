@@ -1,4 +1,4 @@
-package ngsstream
+package ngsstream.utils
 
 import htsjdk.samtools.SAMRecord
 

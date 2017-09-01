@@ -4,6 +4,7 @@ import java.io.{File, FileOutputStream, PrintWriter}
 import java.util.zip.GZIPOutputStream
 
 import htsjdk.samtools.fastq.{FastqReader, FastqRecord}
+import ngsstream.utils.FastqPair
 import org.apache.spark.SparkContext
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
