@@ -2,8 +2,9 @@ package ngsstream.utils
 
 import java.io.{File, PrintWriter}
 
-class Histogram[T](_counts: Map[T, Long] = Map[T, Long]())(implicit ord: Numeric[T])
-  extends Counts[T](_counts) {
+class Histogram[T](_counts: Map[T, Long] = Map[T, Long]())(
+    implicit ord: Numeric[T])
+    extends Counts[T](_counts) {
   def aggregateStats: Map[String, Any] = {
     val values = this.counts.keys.toList
     val counts = this.counts.values.toList
@@ -11,7 +12,10 @@ class Histogram[T](_counts: Map[T, Long] = Map[T, Long]())(implicit ord: Numeric
     if (values.nonEmpty) {
       val modal = values(counts.indexOf(counts.max))
       val totalCounts = counts.sum
-      val mean: Double = values.zip(counts).map(x => ord.toDouble(x._1) * x._2).sum / totalCounts
+      val mean: Double = values
+        .zip(counts)
+        .map(x => ord.toDouble(x._1) * x._2)
+        .sum / totalCounts
       val median = values(
         values
           .zip(counts)
@@ -25,10 +29,10 @@ class Histogram[T](_counts: Map[T, Long] = Map[T, Long]())(implicit ord: Numeric
           }
           ._2)
       Map("min" -> values.min,
-        "max" -> values.max,
-        "median" -> median,
-        "mean" -> mean,
-        "modal" -> modal)
+          "max" -> values.max,
+          "median" -> median,
+          "mean" -> mean,
+          "modal" -> modal)
     } else Map()
   }
 

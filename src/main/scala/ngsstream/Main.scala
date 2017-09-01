@@ -40,7 +40,8 @@ object Main {
     println(s"Context is up, see ${sc.uiWebUrl.getOrElse("")}")
     val reader = new ReadFastqFiles(cmdArgs.r1, cmdArgs.r2, cmdArgs.tempDir)
     val rdds = Await.result(
-      Future.sequence(reader.map(_.map(PairedProcessChunk(_, cmdArgs.reference))).toList),
+      Future.sequence(
+        reader.map(_.map(PairedProcessChunk(_, cmdArgs.reference))).toList),
       Duration.Inf
     )
     reader.close()
@@ -55,8 +56,10 @@ object Main {
                  new File(cmdArgs.outputDir, "output.bam"),
                  dict,
                  cmdArgs.tempDir))
-    val rawSeqStats = PairedSeqstats.reduce(sc.union(rdds.map(_.rawSeqStats))).reduce(_ += _)
-    val qcSeqStats = PairedSeqstats.reduce(sc.union(rdds.map(_.qcSeqStats))).reduce(_ += _)
+    val rawSeqStats =
+      PairedSeqstats.reduce(sc.union(rdds.map(_.rawSeqStats))).reduce(_ += _)
+    val qcSeqStats =
+      PairedSeqstats.reduce(sc.union(rdds.map(_.qcSeqStats))).reduce(_ += _)
     println(rawSeqStats)
     println(qcSeqStats)
     val mapped = mappedRdd.countAsync()

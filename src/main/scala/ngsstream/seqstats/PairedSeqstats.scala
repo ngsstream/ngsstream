@@ -20,7 +20,7 @@ case class PairedSeqstats(r1: Seqstats = Seqstats(), r2: Seqstats = Seqstats()) 
 object PairedSeqstats {
   def fromRdd(data: RDD[FastqPair]): RDD[PairedSeqstats] = {
     data.mapPartitions { it =>
-      Iterator(it.foldLeft(PairedSeqstats())((a,b) => a.add(b)))
+      Iterator(it.foldLeft(PairedSeqstats())((a, b) => a.add(b)))
     }
   }
 

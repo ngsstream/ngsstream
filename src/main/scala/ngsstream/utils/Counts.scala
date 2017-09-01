@@ -4,7 +4,9 @@ import java.io.{File, PrintWriter}
 
 import scala.collection.mutable
 
-class Counts[T](_counts: Map[T, Long] = Map[T, Long]())(implicit ord: Ordering[T]) extends Serializable {
+class Counts[T](_counts: Map[T, Long] = Map[T, Long]())(
+    implicit ord: Ordering[T])
+    extends Serializable {
   protected[Counts] val counts: mutable.Map[T, Long] = mutable.Map() ++ _counts
 
   /** Returns histogram as map */
@@ -15,7 +17,8 @@ class Counts[T](_counts: Map[T, Long] = Map[T, Long]())(implicit ord: Ordering[T
 
   /** This will add an other histogram to `this` */
   def +=(other: Counts[T]): Counts[T] = {
-    other.counts.foreach(x => this.counts += x._1 -> (this.counts.getOrElse(x._1, 0L) + x._2))
+    other.counts.foreach(x =>
+      this.counts += x._1 -> (this.counts.getOrElse(x._1, 0L) + x._2))
     this
   }
 
@@ -45,6 +48,7 @@ class Counts[T](_counts: Map[T, Long] = Map[T, Long]())(implicit ord: Ordering[T
   }
 }
 object Counts {
+
   /** Function to sort Any values */
   def sortAnyAny(a: Any, b: Any): Boolean = {
     a match {
