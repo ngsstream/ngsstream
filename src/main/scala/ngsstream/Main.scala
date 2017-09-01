@@ -35,6 +35,7 @@ object Main {
         .setJars(jars))((a, b) => a.set(b._1, b._2))
 
     implicit val sc: SparkContext = new SparkContext(conf)
+    println(s"Context is up, see ${sc.uiWebUrl.getOrElse("")}")
     val reader = new ReadFastqFiles(cmdArgs.r1, cmdArgs.r2, cmdArgs.tempDir)
     val rdds = Await.result(Future.sequence(reader.map(_.map(ori => ori -> {
       val rdd = ori
