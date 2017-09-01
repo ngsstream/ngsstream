@@ -101,25 +101,34 @@ object Main {
       }
       .persist(StorageLevel.MEMORY_ONLY_SER)
 
-    val mappedWrite = Future {
-      sorted.mapPartitionsWithIndex { case (i, it) =>
-        writeToBam(it, dict, new File(tempDir, s"$i.bam"))
-        Iterator()
-      }.count()
-    }
+    val mappedWrite = sorted.mapPartitionsWithIndex { case (i, it) =>
+        val outputFile = new File(tempDir, s"$i.bam")
+        writeToBam(it, dict, outputFile)
+        Iterator(i -> outputFile)
+      }.collectAsync()
 
-    val unmappedWrite = Future {
-      unmapped.repartition(1).mapPartitions { it =>
-        writeToBam(it.flatMap(r => r.r1 :: r.r2 :: r.secondary), dict, new File(tempDir, s"unmapped.bam"))
-        Iterator()
-      }.count()
-    }
+    val unmappedWrite = unmapped.repartition(1).mapPartitions { it =>
+        val outputFile = new File(tempDir, s"unmapped.bam")
+        writeToBam(it.flatMap(r => r.r1 :: r.r2 :: r.secondary), dict, outputFile)
+        Iterator(-1 -> outputFile)
+      }.collectAsync()
 
-    Await.result(mappedWrite, Duration.Inf)
-    Await.result(unmappedWrite, Duration.Inf)
+    val bamFiles = Await.result(mappedWrite, Duration.Inf) ++ Await.result(unmappedWrite, Duration.Inf)
+    sorted.context.parallelize(bamFiles, 1).foreachPartition { i =>
+      println("Writing complete bam file")
+      val readers = i.map(x => x._1 -> SamReaderFactory.make().open(x._2))
+      val it = readers.map(_._2.toIterator).reduce(_ ++ _)
+      writeToBam(it, dict, outputFile)
+      println("Removing temp bam files")
+      bamFiles.foreach { x =>
+        x._2.delete()
+        new File(x._2.getAbsolutePath.stripSuffix(".bam") + ".bai").delete()
+        new File(x._2.getAbsolutePath + ".md5").delete()
+      }
+    }
   }
 
-  def writeToBam(it: Iterator[SAMRecord], dict: SAMSequenceDictionary, outputFile: File): Unit = {
+  def createSamWriter(dict: SAMSequenceDictionary, outputFile: File): SAMFileWriter = {
     val header = new SAMFileHeader
     header.setSequenceDictionary(dict)
     header.setSortOrder(SAMFileHeader.SortOrder.coordinate)
@@ -127,11 +136,15 @@ object Main {
     SAMFileWriterFactory.setDefaultCreateIndexWhileWriting(true)
     SAMFileWriterFactory.setDefaultCreateMd5File(true)
 
-    val writer = new SAMFileWriterFactory()
+    new SAMFileWriterFactory()
       .setUseAsyncIo(true)
       .setCreateIndex(true)
       .setCreateMd5File(true)
       .makeBAMWriter(header, true, outputFile)
+  }
+
+  def writeToBam(it: Iterator[SAMRecord], dict: SAMSequenceDictionary, outputFile: File): Unit = {
+    val writer = createSamWriter(dict, outputFile)
     it.foreach(writer.addAlignment)
     writer.close()
   }
