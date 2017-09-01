@@ -11,15 +11,14 @@ import scala.collection.JavaConversions._
 import scala.collection.mutable.ListBuffer
 
 class ReadFastqFiles(r1: File,
-                     r2: Option[File],
+                     r2: File,
+                     tempDir: File,
                      numberChunks: Int = 10,
                      minSize: Int = 50000,
-                     groupSize: Int = 50,
-                     tempDir: Option[File] = None)(implicit sc: SparkContext) extends Iterator[RDD[String]] with AutoCloseable {
+                     groupSize: Int = 50)(implicit sc: SparkContext) extends Iterator[RDD[String]] with AutoCloseable {
   private val readerR1 = new FastqReader(r1)
-  private val readerR2 = r2.map(new FastqReader(_))
-  private val it = readerR2.map(itR2 => readerR1.iterator().zip(itR2.iterator().map(Option(_))))
-    .getOrElse(readerR1.iterator().map((_, None))).grouped(groupSize).map(_.map(x => FastqPair(x._1, x._2)))
+  private val readerR2 = new FastqReader(r2)
+  private val it = readerR1.iterator().zip(readerR2.iterator()).map(x => FastqPair(x._1, x._2)).grouped(groupSize)
 
   private val workingChunks: Array[Seq[FastqPair]] = Array.fill(numberChunks)(Seq())
   private val completedChunks: Array[Seq[FastqPair]] = Array.fill(numberChunks)(Seq())
@@ -60,10 +59,7 @@ class ReadFastqFiles(r1: File,
     }
     println("Chunk is read")
 
-    val tempFile = tempDir match {
-      case Some(dir) => new File(dir, s"ngsstream.$outputChunkId.fq")
-      case _ => File.createTempFile(s"ngsstream.$outputChunkId.", ".fq")
-    }
+    val tempFile = new File(tempDir, s"ngsstream.$outputChunkId.fq")
     tempFile.deleteOnExit()
     val writer = new PrintWriter(tempFile)
     output.foreach(writer.println)
@@ -76,7 +72,7 @@ class ReadFastqFiles(r1: File,
 
   def close(): Unit = {
     readerR1.close()
-    readerR2.foreach(_.close())
+    readerR2.close()
     for (i <- 0 until numberChunks) {
       workingChunks(i) = Seq()
       completedChunks(i) = Seq()
