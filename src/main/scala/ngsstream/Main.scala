@@ -1,6 +1,5 @@
 package ngsstream
 
-
 import htsjdk.samtools._
 import org.apache.spark._
 
@@ -19,7 +18,9 @@ import scala.concurrent.ExecutionContext.Implicits.global
 object Main {
   def main(args: Array[String]): Unit = {
     val argsParser = new ArgsParser
-    val cmdArgs = argsParser.parse(args, Args()).getOrElse(throw new IllegalArgumentException)
+    val cmdArgs = argsParser
+      .parse(args, Args())
+      .getOrElse(throw new IllegalArgumentException)
 
     val dict = getDictFromFasta(cmdArgs.reference)
 
@@ -37,34 +38,52 @@ object Main {
     implicit val sc: SparkContext = new SparkContext(conf)
     println(s"Context is up, see ${sc.uiWebUrl.getOrElse("")}")
     val reader = new ReadFastqFiles(cmdArgs.r1, cmdArgs.r2, cmdArgs.tempDir)
-    val rdds = Await.result(Future.sequence(reader.map(_.map(ori => ori -> {
-      val rdd = ori
-        //.pipe(s"cutadapt --interleaved -").setName("cutadapt")
-        .pipe(s"bwa mem -p ${cmdArgs.reference} -").setName("bwa mem")
-        .mapPartitions { x =>
-          val stream: InputStream = new SequenceInputStream(
-            x.map(_ + "\n").map( s => new ByteArrayInputStream(s.getBytes("UTF-8")))
-          )
-          SamReaderFactory.make().open(SamInputResource.of(stream))
-            .iterator()
-            .toList
-            .groupBy(_.getReadName)
-            .iterator
-            .map(x => SamRecordPair.fromList(x._2.toList))
-        }.setName("convert to sam records").cache()
-      rdd -> rdd.countAsync()
-    }
-    )).toList), Duration.Inf)
+    val rdds = Await.result(
+      Future.sequence(reader
+        .map(_.map(ori =>
+          ori -> {
+            val rdd = ori
+            //.pipe(s"cutadapt --interleaved -").setName("cutadapt")
+              .pipe(s"bwa mem -p ${cmdArgs.reference} -")
+              .setName("bwa mem")
+              .mapPartitions {
+                x =>
+                  val stream: InputStream = new SequenceInputStream(
+                    x.map(_ + "\n")
+                      .map(s => new ByteArrayInputStream(s.getBytes("UTF-8")))
+                  )
+                  SamReaderFactory
+                    .make()
+                    .open(SamInputResource.of(stream))
+                    .iterator()
+                    .toList
+                    .groupBy(_.getReadName)
+                    .iterator
+                    .map(x => SamRecordPair.fromList(x._2.toList))
+              }
+              .setName("convert to sam records")
+              .cache()
+            rdd -> rdd.countAsync()
+        }))
+        .toList),
+      Duration.Inf
+    )
     reader.close()
 
     val reads = sc.union(rdds.map(_._1)).countAsync().map(_ / 4)
-    val total = sc.union(rdds.map(_._2._1)).persist(StorageLevel.MEMORY_ONLY_SER)
+    val total =
+      sc.union(rdds.map(_._2._1)).persist(StorageLevel.MEMORY_ONLY_SER)
     val mappedRdd = total.filter(_.isMapped)
     val singletonsRdd = total.filter(_.isSingleton)
     val unmappedRdd = total.filter(!_.isMapped)
     val crossContigsRdd = mappedRdd.filter(_.crossContig)
     val secondaryRdd = mappedRdd.flatMap(_.secondary)
-    val writeBamFuture = Future(writeToBam(mappedRdd, unmappedRdd, new File(cmdArgs.outputDir, "output.bam"), dict, cmdArgs.tempDir))
+    val writeBamFuture = Future(
+      writeToBam(mappedRdd,
+                 unmappedRdd,
+                 new File(cmdArgs.outputDir, "output.bam"),
+                 dict,
+                 cmdArgs.tempDir))
     val mapped = mappedRdd.countAsync()
     val unmapped = unmappedRdd.countAsync()
     val singletons = singletonsRdd.countAsync()
@@ -94,7 +113,8 @@ object Main {
                  outputFile: File,
                  dict: SAMSequenceDictionary,
                  tempDir: File): Unit = {
-    val sorted = mapped.flatMap(r => r.r1 :: r.r2 :: r.secondary)
+    val sorted = mapped
+      .flatMap(r => r.r1 :: r.r2 :: r.secondary)
       .sortBy { r =>
         val ir = r.getReferenceIndex
         val i = if (ir == -1) r.getMateReferenceIndex else ir
@@ -102,19 +122,29 @@ object Main {
       }
       .persist(StorageLevel.MEMORY_ONLY_SER)
 
-    val mappedWrite = sorted.mapPartitionsWithIndex { case (i, it) =>
-        val outputFile = new File(tempDir, s"$i.bam")
-        writeToBam(it, dict, outputFile)
-        Iterator(i -> outputFile)
-      }.collectAsync()
+    val mappedWrite = sorted
+      .mapPartitionsWithIndex {
+        case (i, it) =>
+          val outputFile = new File(tempDir, s"$i.bam")
+          writeToBam(it, dict, outputFile)
+          Iterator(i -> outputFile)
+      }
+      .collectAsync()
 
-    val unmappedWrite = unmapped.repartition(1).mapPartitions { it =>
+    val unmappedWrite = unmapped
+      .repartition(1)
+      .mapPartitions { it =>
         val outputFile = new File(tempDir, s"unmapped.bam")
-        writeToBam(it.flatMap(r => r.r1 :: r.r2 :: r.secondary), dict, outputFile)
+        writeToBam(it.flatMap(r => r.r1 :: r.r2 :: r.secondary),
+                   dict,
+                   outputFile)
         Iterator(-1 -> outputFile)
-      }.collectAsync()
+      }
+      .collectAsync()
 
-    val bamFiles = Await.result(mappedWrite, Duration.Inf) ++ Await.result(unmappedWrite, Duration.Inf)
+    val bamFiles = Await.result(mappedWrite, Duration.Inf) ++ Await.result(
+      unmappedWrite,
+      Duration.Inf)
     sorted.context.parallelize(bamFiles, 1).foreachPartition { i =>
       println("Writing complete bam file")
       val readers = i.map(x => x._1 -> SamReaderFactory.make().open(x._2))
@@ -129,7 +159,8 @@ object Main {
     }
   }
 
-  def createSamWriter(dict: SAMSequenceDictionary, outputFile: File): SAMFileWriter = {
+  def createSamWriter(dict: SAMSequenceDictionary,
+                      outputFile: File): SAMFileWriter = {
     val header = new SAMFileHeader
     header.setSequenceDictionary(dict)
     header.setSortOrder(SAMFileHeader.SortOrder.coordinate)
@@ -144,7 +175,9 @@ object Main {
       .makeBAMWriter(header, true, outputFile)
   }
 
-  def writeToBam(it: Iterator[SAMRecord], dict: SAMSequenceDictionary, outputFile: File): Unit = {
+  def writeToBam(it: Iterator[SAMRecord],
+                 dict: SAMSequenceDictionary,
+                 outputFile: File): Unit = {
     val writer = createSamWriter(dict, outputFile)
     it.foreach(writer.addAlignment)
     writer.close()

@@ -18,16 +18,26 @@ class ReadFastqFiles(r1: File,
                      tempDir: File,
                      numberChunks: Int = 10,
                      minSize: Int = 50000,
-                     groupSize: Int = 50)(implicit sc: SparkContext) extends Iterator[Future[RDD[String]]] with AutoCloseable {
+                     groupSize: Int = 50)(implicit sc: SparkContext)
+    extends Iterator[Future[RDD[String]]]
+    with AutoCloseable {
   private val readerR1 = new FastqReader(r1)
   private val readerR2 = new FastqReader(r2)
-  private val it = readerR1.iterator().zip(readerR2.iterator()).map(x => FastqPair(x._1, x._2)).grouped(groupSize)
+  private val it = readerR1
+    .iterator()
+    .zip(readerR2.iterator())
+    .map(x => FastqPair(x._1, x._2))
+    .grouped(groupSize)
 
-  private val workingChunks: Array[Seq[FastqPair]] = Array.fill(numberChunks)(Seq())
-  private val completedChunks: Array[Seq[FastqPair]] = Array.fill(numberChunks)(Seq())
+  private val workingChunks: Array[Seq[FastqPair]] =
+    Array.fill(numberChunks)(Seq())
+  private val completedChunks: Array[Seq[FastqPair]] =
+    Array.fill(numberChunks)(Seq())
   //private val outputQueue: mutable.Queue[Seq[(FastqRecord, Option[FastqRecord])]] = mutable.Queue()
 
-  def hasNext: Boolean = it.hasNext || workingChunks.exists(_.nonEmpty) || completedChunks.exists(_.nonEmpty)
+  def hasNext: Boolean =
+    it.hasNext || workingChunks.exists(_.nonEmpty) || completedChunks.exists(
+      _.nonEmpty)
 
   private var outputChunkId = 0
   private var currentChunkId = 0
@@ -43,7 +53,8 @@ class ReadFastqFiles(r1: File,
           completedChunks(currentChunkId) = workingChunks(currentChunkId)
           workingChunks(currentChunkId) = Seq()
         } else {
-          completedChunks(currentChunkId) = completedChunks(currentChunkId) ++ workingChunks(currentChunkId)
+          completedChunks(currentChunkId) = completedChunks(currentChunkId) ++ workingChunks(
+            currentChunkId)
           workingChunks(currentChunkId) = Seq()
         }
       }
@@ -52,7 +63,8 @@ class ReadFastqFiles(r1: File,
     }
 
     if (output.isEmpty) {
-      (0 until numberChunks).find(i => workingChunks(i).nonEmpty || completedChunks(i).nonEmpty) match {
+      (0 until numberChunks).find(i =>
+        workingChunks(i).nonEmpty || completedChunks(i).nonEmpty) match {
         case Some(i) =>
           output ++= (completedChunks(i) ++ workingChunks(i))
           completedChunks(i) = Seq()
@@ -67,15 +79,17 @@ class ReadFastqFiles(r1: File,
     Future {
       val tempFile = new File(tempDir, s"ngsstream.$id.fq.gz")
       tempFile.deleteOnExit()
-      var fos  = new FileOutputStream(tempFile)
-      var gzos = new GZIPOutputStream(fos)
+      val fos = new FileOutputStream(tempFile)
+      val gzos = new GZIPOutputStream(fos)
       val writer = new PrintWriter(gzos)
       output.foreach(writer.println)
       writer.close()
       gzos.close()
       fos.close()
       output.clear()
-      sc.textFile(tempFile.getAbsolutePath, 1).setName("Read fastq file").persist(StorageLevel.MEMORY_ONLY_SER)
+      sc.textFile(tempFile.getAbsolutePath, 1)
+        .setName("Read fastq file")
+        .persist(StorageLevel.MEMORY_ONLY_SER)
     }
   }
 
