@@ -11,6 +11,11 @@ import java.net.URLClassLoader
 import htsjdk.samtools.reference.FastaSequenceFile
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
+
+import scala.concurrent.duration.Duration
+import scala.concurrent.{Await, Future}
+import scala.concurrent.ExecutionContext.Implicits.global
+
 object Main {
   def main(args: Array[String]): Unit = {
     val argsParser = new ArgsParser
@@ -26,12 +31,12 @@ object Main {
       new SparkConf()
         .setExecutorEnv(sys.env.toArray)
         .setAppName("ngsstream")
-        .setMaster(cmdArgs.sparkMaster.getOrElse("local[2]"))
+        .setMaster(cmdArgs.sparkMaster.getOrElse("local[1]"))
         .setJars(jars))((a, b) => a.set(b._1, b._2))
 
     implicit val sc: SparkContext = new SparkContext(conf)
     val reader = new ReadFastqFiles(cmdArgs.r1, cmdArgs.r2, cmdArgs.tempDir)
-    val rdds = reader.map(ori => ori -> {
+    val rdds = Await.result(Future.sequence(reader.map(_.map(ori => ori -> {
       val rdd = ori
         //.pipe(s"cutadapt --interleaved -").setName("cutadapt")
         .pipe(s"bwa mem -p ${cmdArgs.reference} -").setName("bwa mem")
@@ -45,32 +50,33 @@ object Main {
             .groupBy(_.getReadName)
             .iterator
             .map(x => SamRecordPair.fromList(x._2.toList))
-        }.setName("convert to sam records")//.cache()
+        }.setName("convert to sam records").cache()
       rdd -> rdd.countAsync()
     }
-    ).toList
+    )).toList), Duration.Inf)
     reader.close()
 
-    val reads = rdds.map(_._1.count()).sum / 4
-    println(s"reads: $reads")
-
+    val reads = sc.union(rdds.map(_._1)).countAsync().map(_ / 4)
     val total = sc.union(rdds.map(_._2._1)).persist(StorageLevel.MEMORY_ONLY_SER)
-    val mapped = total.filter(_.isMapped)
-    val sorted = mapped
-      .sortBy{r =>
-        val contig = r.contigs
-        val pos = Option(r.r1.getAlignmentStart)
-        (contig, pos)
-      }.persist(StorageLevel.MEMORY_ONLY_SER)
+    val mappedRdd = total.filter(_.isMapped)
+    val singletonsRdd = total.filter(_.isSingleton)
+    val unmappedRdd = total.filter(!_.isMapped)
+    val crossContigsRdd = mappedRdd.filter(_.crossContig)
+    val secondaryRdd = mappedRdd.flatMap(_.secondary)
+    val writeBamFuture = Future(writeToBam(mappedRdd, unmappedRdd, new File(cmdArgs.outputDir, "output.bam"), dict, cmdArgs.tempDir))
+    val mapped = mappedRdd.countAsync()
+    val unmapped = unmappedRdd.countAsync()
+    val singletons = singletonsRdd.countAsync()
+    val crossContigs = crossContigsRdd.countAsync()
+    val secondary = secondaryRdd.countAsync()
 
-    val unmapped = total.filter(!_.isMapped)
-    val crossContigs = mapped.filter(_.crossContig)
-    println(s"mapped: ${mapped.count()}")
-    println(s"unmapped: ${unmapped.count()}")
-    println(s"crossContigs: ${crossContigs.count()}")
-    writeToBam(mapped, unmapped, new File(cmdArgs.outputDir, "output.bam"), dict, cmdArgs.tempDir)
-
-    Thread.sleep(100000)
+    println(s"mapped: ${Await.result(mapped, Duration.Inf)}")
+    println(s"unmapped: ${Await.result(unmapped, Duration.Inf)}")
+    println(s"singletons: ${Await.result(singletons, Duration.Inf)}")
+    println(s"crossContigs: ${Await.result(crossContigs, Duration.Inf)}")
+    println(s"secondary: ${Await.result(secondary, Duration.Inf)}")
+    println(s"reads: ${Await.result(reads, Duration.Inf)}")
+    Await.result(writeBamFuture, Duration.Inf)
 
     sc.stop()
   }
@@ -82,47 +88,51 @@ object Main {
     dict
   }
 
-  def writeToBam(mapped: RDD[SamRecordPair], unmapped: RDD[SamRecordPair], outputFile: File, dict: SAMSequenceDictionary, tempDir: File): Unit = {
+  def writeToBam(mapped: RDD[SamRecordPair],
+                 unmapped: RDD[SamRecordPair],
+                 outputFile: File,
+                 dict: SAMSequenceDictionary,
+                 tempDir: File): Unit = {
     val sorted = mapped.flatMap(r => r.r1 :: r.r2 :: r.secondary)
-      .sortBy(r => (Option(r.getContig), Option(r.getAlignmentStart))).persist(StorageLevel.MEMORY_ONLY_SER)
+      .sortBy { r =>
+        val ir = r.getReferenceIndex
+        val i = if (ir == -1) r.getMateReferenceIndex else ir
+        (i, r.getAlignmentStart)
+      }
+      .persist(StorageLevel.MEMORY_ONLY_SER)
+
+    val mappedWrite = Future {
+      sorted.mapPartitionsWithIndex { case (i, it) =>
+        writeToBam(it, dict, new File(tempDir, s"$i.bam"))
+        Iterator()
+      }.count()
+    }
+
+    val unmappedWrite = Future {
+      unmapped.repartition(1).mapPartitions { it =>
+        writeToBam(it.flatMap(r => r.r1 :: r.r2 :: r.secondary), dict, new File(tempDir, s"unmapped.bam"))
+        Iterator()
+      }.count()
+    }
+
+    Await.result(mappedWrite, Duration.Inf)
+    Await.result(unmappedWrite, Duration.Inf)
+  }
+
+  def writeToBam(it: Iterator[SAMRecord], dict: SAMSequenceDictionary, outputFile: File): Unit = {
     val header = new SAMFileHeader
     header.setSequenceDictionary(dict)
     header.setSortOrder(SAMFileHeader.SortOrder.coordinate)
+
     SAMFileWriterFactory.setDefaultCreateIndexWhileWriting(true)
     SAMFileWriterFactory.setDefaultCreateMd5File(true)
+
     val writer = new SAMFileWriterFactory()
       .setUseAsyncIo(true)
       .setCreateIndex(true)
       .setCreateMd5File(true)
       .makeBAMWriter(header, true, outputFile)
-
-    val bla = sorted.mapPartitionsWithIndex { case (i, it) =>
-      val header = new SAMFileHeader
-      header.setSequenceDictionary(dict)
-      header.setSortOrder(SAMFileHeader.SortOrder.coordinate)
-      SAMFileWriterFactory.setDefaultCreateIndexWhileWriting(true)
-      SAMFileWriterFactory.setDefaultCreateMd5File(true)
-      val writer = new SAMFileWriterFactory()
-        .setUseAsyncIo(true)
-        .setCreateIndex(true)
-        .setCreateMd5File(true)
-        .makeBAMWriter(header, true, new File(tempDir, s"$i.bam"))
-      it.foreach(writer.addAlignment)
-      writer.close()
-      Iterator()
-    }.count()
-    unmapped.repartition(1).mapPartitions { it =>
-      val writer = new SAMFileWriterFactory()
-        .setUseAsyncIo(true)
-        .setCreateIndex(true)
-        .setCreateMd5File(true)
-        .makeBAMWriter(header, true, new File(tempDir, s"unmapped.bam"))
-      it.foreach(r => (r.r1 :: r.r2 :: r.secondary).foreach(writer.addAlignment))
-      writer.close()
-      Iterator()
-    }.count()
-    //sorted.toLocalIterator.foreach(writer.addAlignment)
-    //sorted.unpersist()
+    it.foreach(writer.addAlignment)
     writer.close()
   }
 }
