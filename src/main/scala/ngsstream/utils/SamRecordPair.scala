@@ -11,12 +11,31 @@ case class SamRecordPair(r1: SAMRecord,
   def firstOnReference: Option[SAMRecord] =
     if (crossContig) None
     else Some(if (r1.getAlignmentStart <= r2.getAlignmentStart) r1 else r2)
+  def lastOnReference: Option[SAMRecord] = firstOnReference.collect {
+    case r if r == r1 => r2
+    case r if r == r2 => r1
+  }
   def crossContig: Boolean = {
     val c = contigs
     !isSingleton && c._1 != c._2
   }
   def contigs: (Option[String], Option[String]) =
     (Option(r1.getContig), Option(r2.getContig))
+
+  def orientation: PairOrientation.Value = {
+    (firstOnReference, lastOnReference) match {
+      case (Some(first), Some(last)) =>
+        val firstStrand = !first.getReadNegativeStrandFlag
+        val lastStrand = !last.getReadNegativeStrandFlag
+        (firstStrand, lastStrand) match {
+          case (true, true) => PairOrientation.FF
+          case (false, false) => PairOrientation.RR
+          case (true, false) => PairOrientation.FR
+          case (false, true) => PairOrientation.RF
+        }
+      case _ => PairOrientation.NA
+    }
+  }
 }
 
 object SamRecordPair {

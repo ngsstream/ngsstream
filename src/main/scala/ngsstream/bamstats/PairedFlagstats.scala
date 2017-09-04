@@ -1,17 +1,17 @@
 package ngsstream.bamstats
 
-import ngsstream.utils.SamRecordPair
+import ngsstream.utils.{PairOrientation, SamRecordPair}
 
 case class PairedFlagstats(r1: Flagstats,
                            r2: Flagstats,
                            secondary: Flagstats,
-                           pairedFlagstats: Map[PairedFlagstats.PairedFlags.Value, Long]) {
+                           orientation: Map[PairOrientation.Value, Long]) {
   def +(other: PairedFlagstats): PairedFlagstats = {
-    val pairedStats = PairedFlagstats.PairedFlags.values
-      .map(flag => flag -> (other.pairedFlagstats.getOrElse(flag, 0L) +
-        this.pairedFlagstats.getOrElse(flag, 0L))).toMap
+    val oriMap = PairOrientation.values
+      .map(flag => flag -> (other.orientation.getOrElse(flag, 0L) +
+        this.orientation.getOrElse(flag, 0L))).toMap
 
-    PairedFlagstats(other.r1 + this.r1, other.r2 + this.r2, other.secondary + this.secondary, pairedStats)
+    PairedFlagstats(other.r1 + this.r1, other.r2 + this.r2, other.secondary + this.secondary, oriMap)
   }
 
   def primaryFlatstats: Flagstats = r1 + r2
@@ -19,17 +19,12 @@ case class PairedFlagstats(r1: Flagstats,
 }
 
 object PairedFlagstats {
-  object PairedFlags extends Enumeration {
-    val FF, FR, RF, RR, multiContig = Value
-  }
-
-  def generate(pairs: Iterator[SamRecordPair]): PairedFlagstats = {
-    val list = pairs.toList
+  def generate(pairs: Iterable[SamRecordPair]): PairedFlagstats = {
     PairedFlagstats(
-      Flagstats.generate(list.toIterator.map(_.r1)),
-      Flagstats.generate(list.toIterator.map(_.r2)),
-      Flagstats.generate(list.toIterator.flatMap(_.secondary)),
-      Map()
+      Flagstats.generate(pairs.map(_.r1)),
+      Flagstats.generate(pairs.map(_.r2)),
+      Flagstats.generate(pairs.flatMap(_.secondary)),
+      pairs.groupBy(_.orientation).map(x => x._1 -> x._2.size.toLong)
     )
   }
 }

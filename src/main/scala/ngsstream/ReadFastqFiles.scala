@@ -1,16 +1,15 @@
 package ngsstream
 
-import java.io.{File, FileOutputStream, PrintWriter}
-import java.util.zip.GZIPOutputStream
+import java.io.File
 
-import htsjdk.samtools.fastq.{FastqReader, FastqRecord}
-import ngsstream.utils.FastqPair
+import htsjdk.samtools.fastq.FastqReader
+import ngsstream.utils.{FastqPair, GzPrintWriter}
 import org.apache.spark.SparkContext
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
 
 import scala.collection.JavaConversions._
-import scala.collection.mutable.ListBuffer
+import scala.collection.mutable.{ArrayBuffer, ListBuffer}
 import scala.concurrent.Future
 import scala.concurrent.ExecutionContext.Implicits.global
 
@@ -29,12 +28,10 @@ class ReadFastqFiles(r1: File,
     .zip(readerR2.iterator())
     .map(x => FastqPair(x._1, x._2))
     .grouped(groupSize)
-
   private val workingChunks: Array[Seq[FastqPair]] =
     Array.fill(numberChunks)(Seq())
   private val completedChunks: Array[Seq[FastqPair]] =
     Array.fill(numberChunks)(Seq())
-  //private val outputQueue: mutable.Queue[Seq[(FastqRecord, Option[FastqRecord])]] = mutable.Queue()
 
   def hasNext: Boolean =
     it.hasNext || workingChunks.exists(_.nonEmpty) || completedChunks.exists(
@@ -80,13 +77,9 @@ class ReadFastqFiles(r1: File,
     Future {
       val tempFile = new File(tempDir, s"ngsstream.$id.fq.gz")
       tempFile.deleteOnExit()
-      val fos = new FileOutputStream(tempFile)
-      val gzos = new GZIPOutputStream(fos)
-      val writer = new PrintWriter(gzos)
+      val writer = new GzPrintWriter(tempFile)
       output.foreach(writer.println)
       writer.close()
-      gzos.close()
-      fos.close()
       output.clear()
       sc.textFile(tempFile.getAbsolutePath, 1)
         .setName("Read fastq file")

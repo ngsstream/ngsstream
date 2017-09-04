@@ -47,9 +47,10 @@ class PairedProcessChunk(rawData: RDD[String], reference: File) {
       .cache()
   }
   private val _samPairsCount = samRecords.countAsync()
+  val contigGrouped: RDD[((Option[String], Option[String]), Iterable[SamRecordPair])] = samRecords.groupBy(_.contigs)
   def samPairsCount: Long = Await.result(_samPairsCount, Duration.Inf)
 
-  val flagstats: RDD[PairedFlagstats] = samRecords.mapPartitions(it => Iterator(PairedFlagstats.generate(it)))
+  val flagstats = contigGrouped.map(x =>   x._1 -> PairedFlagstats.generate(x._2))
   flagstats.countAsync()
 }
 

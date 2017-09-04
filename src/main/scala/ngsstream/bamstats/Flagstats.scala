@@ -14,16 +14,15 @@ object Flagstats {
     val All, Mapped, Duplicates, FirstOfPair, SecondOfPair, ReadStrand, Secondary = Value
   }
 
-  def generate(records: Iterator[SAMRecord]): Flagstats = {
-    val list = records.toList
+  def generate(records: Iterable[SAMRecord]): Flagstats = {
     Flagstats(Map(
-      Flags.All -> list.size,
-      Flags.Mapped -> list.count(!_.getReadUnmappedFlag),
-      Flags.Duplicates -> list.count(_.getDuplicateReadFlag),
-      Flags.FirstOfPair -> list.count(_.getFirstOfPairFlag),
-      Flags.SecondOfPair -> list.count(_.getSecondOfPairFlag),
-      Flags.ReadStrand -> list.count(!_.getReadNegativeStrandFlag),
-      Flags.Secondary -> list.count(_.isSecondaryOrSupplementary)
+      Flags.All -> records.size,
+      Flags.Mapped -> records.count(!_.getReadUnmappedFlag),
+      Flags.Duplicates -> records.count(_.getDuplicateReadFlag),
+      Flags.FirstOfPair -> records.count(_.getFirstOfPairFlag),
+      Flags.SecondOfPair -> records.count(_.getSecondOfPairFlag),
+      Flags.ReadStrand -> records.count(!_.getReadNegativeStrandFlag),
+      Flags.Secondary -> records.count(_.isSecondaryOrSupplementary)
     ))
   }
 }
