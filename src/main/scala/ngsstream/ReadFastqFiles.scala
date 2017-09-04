@@ -17,8 +17,8 @@ import scala.concurrent.ExecutionContext.Implicits.global
 class ReadFastqFiles(r1: File,
                      r2: File,
                      tempDir: File,
-                     numberChunks: Int = 10,
-                     minSize: Int = 50000,
+                     numberChunks: Int = 5,
+                     minSize: Int = 100000,
                      groupSize: Int = 50)(implicit sc: SparkContext)
     extends Iterator[Future[RDD[String]]]
     with AutoCloseable {

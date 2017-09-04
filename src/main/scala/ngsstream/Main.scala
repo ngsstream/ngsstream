@@ -18,7 +18,7 @@ import scala.concurrent.{Await, Future}
 
 object Main {
   def main(args: Array[String]): Unit = {
-    val argsParser = new ArgsParser
+    val argsParser = new Args.ArgsParser
     val cmdArgs = argsParser
       .parse(args, Args())
       .getOrElse(throw new IllegalArgumentException)
@@ -60,8 +60,13 @@ object Main {
       PairedSeqstats.reduce(sc.union(rdds.map(_.rawSeqStats))).reduce(_ += _)
     val qcSeqStats =
       PairedSeqstats.reduce(sc.union(rdds.map(_.qcSeqStats))).reduce(_ += _)
+    val flagstats = sc.union(rdds.map(_.flagstats))
+      .repartition(1)
+      .mapPartitions(it => Iterator(it.reduce(_ + _)))
+        .reduce(_ + _)
     println(rawSeqStats)
     println(qcSeqStats)
+    println(flagstats)
     val mapped = mappedRdd.countAsync()
     val unmapped = unmappedRdd.countAsync()
 
