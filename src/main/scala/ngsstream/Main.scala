@@ -1,12 +1,13 @@
 package ngsstream
 
-import java.io.File
+import java.io.{ByteArrayInputStream, File, InputStream, SequenceInputStream}
 import java.net.URLClassLoader
 
 import htsjdk.samtools._
+import htsjdk.samtools.fastq.{FastqReader, FastqRecord}
 import htsjdk.samtools.reference.FastaSequenceFile
 import ngsstream.seqstats.PairedSeqstats
-import ngsstream.utils.SamRecordPair
+import ngsstream.utils.{FastqPair, SamRecordPair}
 import org.apache.spark._
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
@@ -38,41 +39,30 @@ object Main {
 
     implicit val sc: SparkContext = new SparkContext(conf)
     println(s"Context is up, see ${sc.uiWebUrl.getOrElse("")}")
-    val reader = new ReadFastqFiles(cmdArgs.r1, cmdArgs.r2, cmdArgs.tempDir)
-    val rdds = Await.result(
-      Future.sequence(
-        reader.map(_.map(PairedProcessChunk(_, cmdArgs.reference))).toList),
-      Duration.Inf
-    )
-    reader.close()
 
-    val total =
-      sc.union(rdds.map(_.samRecords)).persist(StorageLevel.MEMORY_ONLY_SER)
-    val mappedRdd = total.filter(_.isMapped)
-    val unmappedRdd = total.filter(!_.isMapped)
-    val writeBamFuture = Future(
-      writeToBam(mappedRdd,
-                 unmappedRdd,
-                 new File(cmdArgs.outputDir, "output.bam"),
-                 dict,
-                 cmdArgs.tempDir))
-    val rawSeqStats =
-      PairedSeqstats.reduce(sc.union(rdds.map(_.rawSeqStats))).reduce(_ += _)
-    val qcSeqStats =
-      PairedSeqstats.reduce(sc.union(rdds.map(_.qcSeqStats))).reduce(_ += _)
-    val flagstats = sc.union(rdds.map(_.flagstats)).reduceByKey(_ + _).map(_._2).reduce(_ + _)
-    println()
-    println(rawSeqStats)
-    println()
-    println(qcSeqStats)
-    println()
-    println(flagstats)
-    val mapped = mappedRdd.countAsync()
-    val unmapped = unmappedRdd.countAsync()
+    val bla1 = sc.parallelize(List(cmdArgs.r1)).mapPartitions(_.flatMap(readFastqFile)).repartition(200).cache()
+    val bla2 = sc.parallelize(List(cmdArgs.r2)).mapPartitions(_.flatMap(readFastqFile)).repartition(200).cache()
 
-    println(s"mapped: ${Await.result(mapped, Duration.Inf)}")
-    println(s"unmapped: ${Await.result(unmapped, Duration.Inf)}")
-    Await.result(writeBamFuture, Duration.Inf)
+    val pairs = bla1.zip(bla2).map(x => FastqPair(x._1, x._2))
+
+    val alignment = pairs.pipe(s"bwa mem -p ${cmdArgs.reference} -")
+      .setName("bwa mem")
+      .mapPartitions(samStringToSamRecordPair)
+      .setName("convert to sam records")
+      .sortBy { r =>
+        if (!r.firstOnReference.forall(_.getReadUnmappedFlag)) {
+          Some(r.r1.getContig, r.r1.getAlignmentStart)
+        } else None
+      }.cache()
+
+    val duplicates = alignment.groupBy(_.firstOnReference.map(x => (x.getContig, x.getAlignmentStart)))
+      .filter(_._2.size > 1).flatMap(_._2).countAsync()
+
+    val totalAlignment = alignment.countAsync()
+    println(Await.result(duplicates, Duration.Inf))
+    println(Await.result(totalAlignment, Duration.Inf))
+
+    Thread.sleep(1000000)
 
     sc.stop()
   }
@@ -157,5 +147,24 @@ object Main {
     val writer = createSamWriter(dict, outputFile)
     it.foreach(writer.addAlignment)
     writer.close()
+  }
+
+  def readFastqFile(fastqFile: File): Iterator[FastqRecord] = {
+    new FastqReader(fastqFile).iterator()
+  }
+
+  def samStringToSamRecordPair(x: Iterator[String]): Iterator[SamRecordPair] = {
+    val stream: InputStream = new SequenceInputStream(
+      x.map(_ + "\n")
+        .map(s => new ByteArrayInputStream(s.getBytes("UTF-8")))
+    )
+    SamReaderFactory
+      .make()
+      .open(SamInputResource.of(stream))
+      .iterator()
+      .toList
+      .groupBy(_.getReadName)
+      .iterator
+      .map(x => SamRecordPair.fromList(x._2.toList))
   }
 }
