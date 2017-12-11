@@ -2,13 +2,23 @@ name := "ngsstream"
 
 version := "0.1"
 
-scalaVersion := "2.11.6"
+scalaVersion := "2.11.12"
 
-libraryDependencies += "com.github.scopt" % "scopt_2.11" % "3.6.0"
-libraryDependencies += "com.github.samtools" % "htsjdk" % "2.11.0"
-libraryDependencies += "org.apache.spark" % "spark-streaming_2.11" % "2.2.0"
+resolvers += Resolver.sonatypeRepo("snapshots")
 
-//mainClass in assembly := Some("ngsstream.Main")
+dependencyOverrides += "com.fasterxml.jackson.core" % "jackson-core" % "2.8.7"
+dependencyOverrides += "com.fasterxml.jackson.core" % "jackson-databind" % "2.8.7"
+dependencyOverrides += "com.fasterxml.jackson.module" % "jackson-module-scala_2.11" % "2.8.7"
+
+libraryDependencies += "com.github.biopet" %% "tool-utils" % "0.2" changing()
+libraryDependencies += "com.github.biopet" %% "spark-utils" % "0.2" changing()
+
+//libraryDependencies += "org.apache.spark" %% "spark-streaming" % "2.2.0"
+libraryDependencies += "org.broadinstitute" % "gatk-bwamem-jni" % "1.0.3"
+libraryDependencies += "org.bdgenomics.adam" %% "adam-core-spark2" % "0.22.0"
+libraryDependencies += "org.bdgenomics.utils" %% "utils-misc-spark2" % "0.2.13"
+
+mainClass in assembly := Some("ngsstream.Main")
 
 assemblyMergeStrategy in assembly := {
   case PathList(ps @ _*) if ps.last endsWith "pom.properties" =>

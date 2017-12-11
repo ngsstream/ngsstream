@@ -1,77 +1,41 @@
 package ngsstream
 
 import java.io.{ByteArrayInputStream, File, InputStream, SequenceInputStream}
-import java.net.URLClassLoader
 
 import htsjdk.samtools._
 import htsjdk.samtools.fastq.{FastqReader, FastqRecord}
-import htsjdk.samtools.reference.FastaSequenceFile
-import ngsstream.seqstats.PairedSeqstats
-import ngsstream.utils.{FastqPair, SamRecordPair}
-import org.apache.spark._
+import ngsstream.utils.SamRecordPair
+import nl.biopet.utils.ngs.fasta
+import nl.biopet.utils.spark
+import nl.biopet.utils.tool.{AbstractOptParser, ToolCommand}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
+import org.bdgenomics.adam.rdd.ADAMContext._
+import org.bdgenomics.adam.rdd.fragment.InterleavedFASTQInFormatter
+import org.bdgenomics.adam.rdd.read.{AlignmentRecordRDD, AnySAMOutFormatter, SAMInFormatter}
 
 import scala.collection.JavaConversions._
-import scala.concurrent.ExecutionContext.Implicits.global
+import scala.concurrent.Await
 import scala.concurrent.duration.Duration
-import scala.concurrent.{Await, Future}
 
-object Main {
+object Main extends ToolCommand[Args] {
   def main(args: Array[String]): Unit = {
-    val argsParser = new Args.ArgsParser
-    val cmdArgs = argsParser
-      .parse(args, Args())
-      .getOrElse(throw new IllegalArgumentException)
+    val cmdArgs = cmdArrayToArgs(args)
 
-    val dict = getDictFromFasta(cmdArgs.reference)
-
-    val jars = ClassLoader.getSystemClassLoader
-      .asInstanceOf[URLClassLoader]
-      .getURLs
-      .map(_.getFile)
-    val conf = cmdArgs.sparkConfigValues.foldLeft(
-      new SparkConf()
-        .setExecutorEnv(sys.env.toArray)
-        .setAppName("ngsstream")
-        .setMaster(cmdArgs.sparkMaster.getOrElse("local[1]"))
-        .setJars(jars))((a, b) => a.set(b._1, b._2))
-
-    implicit val sc: SparkContext = new SparkContext(conf)
+    val sc = spark.loadSparkContext("ngstream", cmdArgs.sparkMaster, cmdArgs.sparkConfigValues)
     println(s"Context is up, see ${sc.uiWebUrl.getOrElse("")}")
 
-    val bla1 = sc.parallelize(List(cmdArgs.r1)).mapPartitions(_.flatMap(readFastqFile)).repartition(200).cache()
-    val bla2 = sc.parallelize(List(cmdArgs.r2)).mapPartitions(_.flatMap(readFastqFile)).repartition(200).cache()
+    val rawData: AlignmentRecordRDD = sc.loadFastq(cmdArgs.r1.getAbsolutePath, Some(cmdArgs.r2.getAbsolutePath))
+    val fragments = rawData.toFragments
 
-    val pairs = bla1.zip(bla2).map(x => FastqPair(x._1, x._2))
-
-    val alignment = pairs.pipe(s"bwa mem -p ${cmdArgs.reference} -")
-      .setName("bwa mem")
-      .mapPartitions(samStringToSamRecordPair)
-      .setName("convert to sam records")
-      .sortBy { r =>
-        if (!r.firstOnReference.forall(_.getReadUnmappedFlag)) {
-          Some(r.r1.getContig, r.r1.getAlignmentStart)
-        } else None
-      }.cache()
-
-    val duplicates = alignment.groupBy(_.firstOnReference.map(x => (x.getContig, x.getAlignmentStart)))
-      .filter(_._2.size > 1).flatMap(_._2).countAsync()
-
-    val totalAlignment = alignment.countAsync()
-    println(Await.result(duplicates, Duration.Inf))
-    println(Await.result(totalAlignment, Duration.Inf))
+    implicit val tFormatter = InterleavedFASTQInFormatter(fragments)
+    implicit val uFormatter: AnySAMOutFormatter = new AnySAMOutFormatter
+    val alignment: AlignmentRecordRDD = fragments.pipe(s"bwa mem -p ${cmdArgs.reference.getAbsolutePath} -")
+    val outputBam = new File(cmdArgs.outputDir, "output.bam")
+    alignment.saveAsSam(outputBam.getAbsolutePath)
 
     Thread.sleep(1000000)
-
     sc.stop()
-  }
-
-  def getDictFromFasta(fastaFile: File): SAMSequenceDictionary = {
-    val referenceFile = new FastaSequenceFile(fastaFile, true)
-    val dict = referenceFile.getSequenceDictionary
-    referenceFile.close()
-    dict
   }
 
   def writeToBam(mapped: RDD[SamRecordPair],
@@ -167,4 +131,14 @@ object Main {
       .iterator
       .map(x => SamRecordPair.fromList(x._2.toList))
   }
+
+  override def argsParser: AbstractOptParser[Args] = new Args.ArgsParser(this)
+
+  override def emptyArgs: Args = Args()
+
+  override def descriptionText: String = ""
+
+  override def manualText: String = ""
+
+  override def exampleText: String = ""
 }

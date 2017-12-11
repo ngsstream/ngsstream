@@ -2,6 +2,8 @@ package ngsstream
 
 import java.io.File
 
+import nl.biopet.utils.tool.{AbstractOptParser, ToolCommand}
+
 case class Args(r1: File = null,
                 r2: File = null,
                 outputDir: File = null,
@@ -9,14 +11,12 @@ case class Args(r1: File = null,
                 tempDir: File = null,
                 sparkMaster: Option[String] = None,
                 sparkConfigValues: Map[String, String] = Map(
-                  "spark.memory.fraction" -> "0.1",
-                  "spark.memory.storageFraction" -> "0.2",
                   "spark.driver.maxResultSize" -> "2G",
                   "spark.driver.memory" -> "2G"
                 ))
 
 object Args {
-  class ArgsParser extends scopt.OptionParser[Args]("ngsstream") {
+  class ArgsParser(toolCommand: ToolCommand[Args]) extends AbstractOptParser[Args](toolCommand) {
     opt[File]('1', "fastqR1").required().action((x, c) => c.copy(r1 = x))
     opt[File]('2', "fastqR2").required().action((x, c) => c.copy(r2 = x))
     opt[File]('o', "outputDir")
